@@ -1,10 +1,10 @@
-# Oracle VM
+# OmaVM
 
 An Omarchy bar widget and panel that keeps an eye on an Oracle Cloud (OCI) VM
 over SSH: live gauges, history charts, processes, services, network, security,
 package updates and the Always Free reclaim guard. Colors follow your Omarchy theme.
 
-![Oracle VM](preview.png)
+![OmaVM](preview.png)
 
 Nothing is installed on the VM. A small Python collector is streamed over one
 multiplexed SSH connection and prints JSON; the panel does the rest locally.
@@ -12,15 +12,15 @@ multiplexed SSH connection and prints JSON; the panel does the rest locally.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/AbdulazizAlwabel/omarchy-oracle-vm --enable --yes
+omarchy plugin add https://github.com/AbdulazizAlwabel/omarchy-omavm --enable --yes
 ```
 
 Then point it at your VM (or use the widget's settings in the bar editor):
 
 ```bash
-omarchy bar set aziz.oracle-vm host 203.0.113.10          # public IP or hostname
-omarchy bar set aziz.oracle-vm user opc                   # default: opc
-omarchy bar set aziz.oracle-vm keyPath ~/.ssh/oci_key     # empty = your ssh agent / default keys
+omarchy bar set omavm host 203.0.113.10          # public IP or hostname
+omarchy bar set omavm user opc                   # default: opc
+omarchy bar set omavm keyPath ~/.ssh/oci_key     # empty = your ssh agent / default keys
 ```
 
 Other settings: `port`, `label` (display name), `barStyle`, `pollSeconds`,
@@ -64,15 +64,15 @@ shell. The pill turns urgent-colored on alerts and dims while the VM is unreacha
 In the panel: `1`–`7` / `←` `→` tabs · `r` refresh · `s` shell · `t` top ·
 `c` copy IP · `m` metric · `g` range · `p` process sort · `o` OCI console.
 
-IPC: `omarchy-shell aziz.oracle-vm open|close|toggle|refresh|shell|status|tab <name>`
+IPC: `omarchy-shell omavm open|close|toggle|refresh|shell|status|tab <name>`
 
 ## Privacy and safety
 
 - The only network traffic is your own SSH connection to your VM.
 - History stays local, one file per VM:
-  `~/.local/state/omarchy/settings/oracle-vm-history-<host>.json`
+  `~/.local/state/omarchy/settings/omavm-history-<host>.json`
   (1-minute buckets, 7 days; the previous version is kept as `.bak` each session). The SSH control socket lives in
-  `~/.cache/aziz-oracle-vm/` (mode 700).
+  `~/.cache/omavm/` (mode 700).
 - Host, user, port and unit names are validated before they reach `ssh`.
 - Local files (history and its backup, SSH error output) are only ever written
   to fresh `mktemp` files and renamed into place, never through a symlink; a
@@ -85,9 +85,9 @@ IPC: `omarchy-shell aziz.oracle-vm open|close|toggle|refresh|shell|status|tab <n
 ## Uninstall
 
 ```bash
-omarchy plugin remove aziz.oracle-vm --yes
-rm -f ~/.local/state/omarchy/settings/oracle-vm-history*       # optional: recorded history
-rm -rf ~/.cache/aziz-oracle-vm                                 # optional: SSH control socket
+omarchy plugin remove omavm --yes
+rm -f ~/.local/state/omarchy/settings/omavm-history*   # optional: recorded history
+rm -rf ~/.cache/omavm                                  # optional: SSH control socket
 ```
 
 ## Files

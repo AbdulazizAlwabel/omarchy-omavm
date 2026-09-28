@@ -9,7 +9,7 @@ import "."
 // click forces a refresh, right click opens an SSH shell.
 BarWidget {
   id: root
-  moduleName: "aziz.oracle-vm"
+  moduleName: "omavm"
 
   readonly property var panel: panelLoader.item
 
@@ -72,7 +72,7 @@ BarWidget {
     // Urgent color when something needs attention; dimmed while unreachable.
     active: root.src ? root.src.alertLevel >= 2 : false
     dimmed: root.src ? (!root.src.online && !root.src.connecting) : false
-    tooltipText: root.src ? root.src.barTooltip : "Oracle VM"
+    tooltipText: root.src ? root.src.barTooltip : "OmaVM"
 
     onPressed: function(b) {
       if (b === Qt.RightButton) { if (root.panel) root.panel.runTerminal("shell") }

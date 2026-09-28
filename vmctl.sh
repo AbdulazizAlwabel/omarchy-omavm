@@ -13,7 +13,7 @@ set -uo pipefail
 verb=${1:?verb}; host=${2:?host}; user=${3:?user}; port=${4:-22}; key=${5:-}
 arg=${6:-}
 here=$(cd "$(dirname "$0")" && pwd)
-cache="${XDG_CACHE_HOME:-$HOME/.cache}/aziz-oracle-vm"
+cache="${XDG_CACHE_HOME:-$HOME/.cache}/omavm"
 # Our own private dir. Refuse a symlink here rather than follow it.
 [ -L "$cache" ] && { echo "refused: $cache is a symlink" >&2; exit 2; }
 mkdir -p -- "$cache" && chmod 700 -- "$cache"
@@ -46,7 +46,7 @@ guard() {
 
 terminal() {
   local title=$1; shift
-  exec setsid uwsm-app -- xdg-terminal-exec --app-id=org.omarchy.oracle-vm --title="$title" -- "$@"
+  exec setsid uwsm-app -- xdg-terminal-exec --app-id=org.omarchy.omavm --title="$title" -- "$@"
 }
 
 case "$verb" in

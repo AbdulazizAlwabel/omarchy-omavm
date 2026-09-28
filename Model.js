@@ -1,4 +1,4 @@
-// Pure helpers for the Oracle VM plugin. No QML imports, so the file can be
+// Pure helpers for the OmaVM plugin. No QML imports, so the file can be
 // exercised from node: `node -e 'eval(require("fs").readFileSync("Model.js","utf8"))'`.
 
 // Nerd Font glyphs, kept as escapes: private-use glyphs get dropped when a
@@ -227,7 +227,7 @@ function levelFor(pct, threshold) {
 
 // ---- History (persisted, 1-minute buckets, 7 days) -------------------------
 //
-// ~/.local/state/omarchy/settings/oracle-vm-history.json
+// ~/.local/state/omarchy/settings/omavm-history-<host>.json
 //   { v: 1, host, b: [[minute, cpu, mem, rx, tx, lat, steal, n], ...] }
 var WEEK_MIN = 7 * 24 * 60
 

@@ -6,7 +6,7 @@ import qs.Ui
 import "Model.js" as Model
 import "."
 
-// Oracle VM panel. Owns all polling (vmctl.sh over one multiplexed SSH
+// OmaVM panel. Owns all polling (vmctl.sh over one multiplexed SSH
 // connection), history, alerts and actions. Every color is derived from the
 // bar / Color / Style singletons, so it re-skins with the Omarchy theme.
 //
@@ -15,8 +15,8 @@ import "."
 // vmctl.sh enforces the same rule again on the shell side.
 Panel {
   id: root
-  moduleName: "aziz.oracle-vm"
-  ipcTarget: "aziz.oracle-vm"
+  moduleName: "omavm"
+  ipcTarget: "omavm"
   manageIpc: false
 
   property var anchorItem: null
@@ -83,7 +83,7 @@ Panel {
   // ~/.config/omarchy/plugins/<id>/), so help text stays right after a rename.
   readonly property string pluginId: {
     var u = String(Qt.resolvedUrl(".")).replace(/\/$/, "")
-    return decodeURIComponent(u.substring(u.lastIndexOf("/") + 1)) || "aziz.oracle-vm"
+    return decodeURIComponent(u.substring(u.lastIndexOf("/") + 1)) || "omavm"
   }
   readonly property string setupCommand: "omarchy bar set " + pluginId + " host <public IP>"
   property int failStreak: 0
@@ -119,7 +119,7 @@ Panel {
   readonly property real cpuPct: cpu ? cpu.total : 0
   readonly property real memPct: mem ? mem.pct : 0
   readonly property var oci: inv && inv.oci ? inv.oci : ({})
-  readonly property string displayName: !configured ? "Oracle VM" : label !== "" ? label : (oci.displayName || (snap ? snap.hostname : host))
+  readonly property string displayName: !configured ? "OmaVM" : label !== "" ? label : (oci.displayName || (snap ? snap.hostname : host))
   readonly property var hermesUnit: snap && snap.hermes && snap.hermes.units.length > 0 ? snap.hermes.units[0] : null
   readonly property var hermesUnitInfo: snap && snap.hermes ? Model.parseUnitInfo(snap.hermes.unitInfo) : ({})
 
@@ -322,14 +322,13 @@ Panel {
   // ---- History (7 days, 1-minute buckets) ----------------------------------
   //
   // One file per host, so switching VMs never overwrites another VM's history:
-  //   ~/.local/state/omarchy/settings/oracle-vm-history-<host>.json
-  // The pre-1.1 single file (oracle-vm-history.json) is still read once as a
-  // fallback when the per-host file doesn't exist yet. Before the first save of
-  // each session the previous file is copied to <file>.bak.
+  //   ~/.local/state/omarchy/settings/omavm-history-<host>.json
+  // Before the first save of each session the previous file is copied to
+  // <file>.bak.
   readonly property string historyDir: Quickshell.env("HOME") + "/.local/state/omarchy/settings"
+  readonly property string hostSlug: host.replace(/[^A-Za-z0-9._-]/g, "_")
   readonly property string historyPath: configured
-    ? historyDir + "/oracle-vm-history-" + host.replace(/[^A-Za-z0-9._-]/g, "_") + ".json" : ""
-  readonly property string legacyHistoryPath: historyDir + "/oracle-vm-history.json"
+    ? historyDir + "/omavm-history-" + hostSlug + ".json" : ""
   property var history: Model.parseHistory("", host)
   property bool historyLoaded: false
   property bool historyDirty: false
@@ -338,11 +337,10 @@ Panel {
   property string pendingHistoryText: ""
 
   // ---- Loading: one explicit read, newest request wins ------------------------
-  // A single `cat` reads the per-host file, or the legacy file only when the
-  // per-host one doesn't exist. Every request gets a token; a result for an
-  // older token is ignored, and a request made while a read is running is
-  // re-issued when it finishes. No file-watcher events are involved, so there's
-  // nothing to race.
+  // A single `cat` reads the per-host file. Every request gets a token; a
+  // result for an older token is ignored, and a request made while a read is
+  // running is re-issued when it finishes. No file-watcher events are
+  // involved, so there's nothing to race.
   property int historyToken: 0
   property bool historyReadAgain: false
 
@@ -359,8 +357,9 @@ Panel {
 
   function startHistoryRead() {
     historyReadProc.token = historyToken
-    historyReadProc.command = ["sh", "-c", 'if [ -f "$1" ]; then cat -- "$1"; elif [ -f "$2" ]; then cat -- "$2"; fi',
-      "sh", historyPath, legacyHistoryPath]
+    historyReadProc.command = ["sh", "-c",
+      '[ -f "$1" ] || exit 0; cat -- "$1"',
+      "sh", historyPath]
     historyReadProc.running = true
   }
 
@@ -411,7 +410,7 @@ Panel {
     id: historyWriter
     onWritten: function(path, ok) {
       if (ok) return
-      console.warn("oracle-vm: could not save history to", path)
+      console.warn("omavm: could not save history to", path)
       if (path === root.historyPath) root.historyDirty = true
     }
   }
@@ -428,7 +427,7 @@ Panel {
     var cutoff = Math.floor(Date.now() / 60000) - Model.WEEK_MIN
     var memMinutes = history.b.map(function(r) { return r[0] })
     if (validCount(memMinutes, cutoff) < validCount(diskMinutes, cutoff)) {
-      console.warn("oracle-vm: in-memory history has less data than the file; reloading instead of saving")
+      console.warn("omavm: in-memory history has less data than the file; reloading instead of saving")
       loadHistory()
       return
     }
@@ -478,7 +477,7 @@ Panel {
         root.diskMinutes = root.pendingMinutes
       } else {
         // Keep the samples in memory and try again at the next save.
-        console.warn("oracle-vm: history backup failed; not overwriting", root.historyPath)
+        console.warn("omavm: history backup failed; not overwriting", root.historyPath)
         root.historyBackedUp = false
         root.historyDirty = true
       }
@@ -565,7 +564,7 @@ Panel {
     if (key === "online") delete n["offline"]
     if (key === "offline") delete n["online"]
     notified = n
-    Quickshell.execDetached(["notify-send", "-a", "Oracle VM", "-u", level >= 2 && key !== "online" ? "critical" : "normal", title, body])
+    Quickshell.execDetached(["notify-send", "-a", "OmaVM", "-u", level >= 2 && key !== "online" ? "critical" : "normal", title, body])
   }
 
   // ---- Bar summary ---------------------------------------------------------
@@ -574,7 +573,7 @@ Panel {
   readonly property string barMem: Model.fmtPct(memPct)
   readonly property string statusText: !configured ? "Not set up" : connecting ? "Connecting…" : (!online ? "Offline" : (alertLevel >= 2 ? "Needs attention" : (alertLevel === 1 ? "Heads up" : "Healthy")))
   readonly property string barTooltip: {
-    if (!configured) return "Oracle VM — not set up yet\nSet the host: " + setupCommand
+    if (!configured) return "OmaVM — not set up yet\nSet the host: " + setupCommand
     if (connecting) return displayName + " — connecting…"
     if (!online) return displayName + " — offline\n" + lastError
     var t = displayName + " · " + statusText + " · " + latency + " ms"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Oracle VM collector — streamed over SSH (`ssh host python3 - <tier>`) and
+# OmaVM collector — streamed over SSH (`ssh host python3 - <tier>`) and
 # never written to the VM. Read-only: it only inspects /proc, systemd, dnf's
 # cache and the instance metadata service. It never signals, restarts or
 # edits anything, and it treats the Hermes agent as look-but-don't-touch.
