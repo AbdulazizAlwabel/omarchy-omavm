@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "id": "aziz.oracle-vm",
+  "name": "Oracle VM",
+  "version": "1.0.0",
+  "author": "Aziz",
+  "license": "MIT",
+  "description": "Live health of an Oracle Cloud VM over SSH: gauges, history charts, processes, services, network, security, Always-Free reclaim guard, optional monitor-only view of Hermes Agent, plus one-click SSH actions. Nothing is installed on the VM.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Oracle VM",
+    "description": "Cloud VM status pill with a full monitoring panel",
+    "category": "System",
+    "aliases": ["oracle-vm", "vm", "oci"],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "host": "",
+      "user": "opc",
+      "port": 22,
+      "keyPath": "",
+      "label": "",
+      "barStyle": "Icon + CPU + RAM",
+      "pollSeconds": 3,
+      "slowMinutes": 5,
+      "cpuAlert": 90,
+      "memAlert": 90,
+      "diskAlert": 85,
+      "notify": true
+    },
+    "schema": [
+      { "key": "host", "type": "string", "label": "Host / public IP", "defaultValue": "" },
+      { "key": "user", "type": "string", "label": "SSH user", "defaultValue": "opc" },
+      { "key": "port", "type": "integer", "label": "SSH port", "min": 1, "max": 65535, "step": 1, "defaultValue": 22 },
+      { "key": "keyPath", "type": "path", "label": "SSH private key", "defaultValue": "" },
+      { "key": "label", "type": "string", "label": "Display name", "defaultValue": "", "description": "Leave empty to use the OCI instance name." },
+      { "key": "barStyle", "type": "enum", "label": "Bar pill", "options": ["Icon", "Icon + CPU", "Icon + CPU + RAM", "Icon + name"], "defaultValue": "Icon + CPU + RAM" },
+      { "key": "pollSeconds", "type": "integer", "label": "Live poll interval (seconds)", "min": 2, "max": 60, "step": 1, "defaultValue": 3 },
+      { "key": "slowMinutes", "type": "integer", "label": "Inventory / security refresh (minutes)", "min": 1, "max": 60, "step": 1, "defaultValue": 5 },
+      { "key": "cpuAlert", "type": "integer", "label": "CPU alert threshold (%)", "min": 50, "max": 100, "step": 5, "defaultValue": 90 },
+      { "key": "memAlert", "type": "integer", "label": "Memory alert threshold (%)", "min": 50, "max": 100, "step": 5, "defaultValue": 90 },
+      { "key": "diskAlert", "type": "integer", "label": "Disk alert threshold (%)", "min": 50, "max": 100, "step": 5, "defaultValue": 85 },
+      { "key": "notify", "type": "boolean", "label": "Desktop notifications for alerts and outages", "defaultValue": true }
+    ]
+  }
+}
