@@ -14,7 +14,9 @@ verb=${1:?verb}; host=${2:?host}; user=${3:?user}; port=${4:-22}; key=${5:-}
 arg=${6:-}
 here=$(cd "$(dirname "$0")" && pwd)
 cache="${XDG_CACHE_HOME:-$HOME/.cache}/aziz-oracle-vm"
-mkdir -p "$cache" && chmod 700 "$cache"
+# Our own private dir. Refuse a symlink here rather than follow it.
+[ -L "$cache" ] && { echo "refused: $cache is a symlink" >&2; exit 2; }
+mkdir -p -- "$cache" && chmod 700 -- "$cache"
 
 # Settings come from the widget config; refuse anything ssh could mistake for
 # an option (a leading "-") or that isn't a plain hostname/IP, user or port.
@@ -49,13 +51,17 @@ terminal() {
 
 case "$verb" in
   fast|slow|pkg)
+    # stderr goes to a fresh mktemp file (exclusive create, random name),
+    # removed on exit, never to a fixed path that a symlink could redirect.
+    errf=$(mktemp -- "$cache/err.XXXXXX") || exit 1
+    trap 'rm -f -- "$errf"' EXIT
     t0=$(date +%s%N)
-    out=$(ssh "${opts[@]}" "$target" "nice -n 10 python3 - $verb" < "$here/collector.py" 2>"$cache/last-error")
+    out=$(ssh "${opts[@]}" "$target" "nice -n 10 python3 - $verb" < "$here/collector.py" 2>"$errf")
     rc=$?
     t1=$(date +%s%N)
     printf '%s\n' "$(( (t1 - t0) / 1000000 ))"
     if (( rc != 0 )); then
-      printf '{"error":%s}\n' "$(tr '\n' ' ' < "$cache/last-error" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().strip() or "ssh exited '"$rc"'"))')"
+      printf '{"error":%s}\n' "$(tr '\n' ' ' < "$errf" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().strip() or "ssh exited '"$rc"'"))')"
       exit "$rc"
     fi
     printf '%s\n' "$out"

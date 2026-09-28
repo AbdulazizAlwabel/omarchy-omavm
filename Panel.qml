@@ -196,7 +196,7 @@ Panel {
     onTriggered: root.nowMs = Date.now()
   }
 
-  Component.onCompleted: { Leader.claim(root); Qt.callLater(refreshAll) }
+  Component.onCompleted: { Leader.claim(root); loadHistory(); Qt.callLater(refreshAll) }
 
   // Each run remembers the target it was started for: a reply that lands after
   // the host/user/key changed belongs to the old VM and is dropped.
@@ -337,17 +337,62 @@ Panel {
   property bool historyBackedUp: false
   property string pendingHistoryText: ""
 
-  // (Re)read the current host's history. Always clears historyLoaded first, so
-  // the load can't be mistaken for one of our own writes and skipped.
+  // ---- Loading: one explicit read, newest request wins ------------------------
+  // A single `cat` reads the per-host file, or the legacy file only when the
+  // per-host one doesn't exist. Every request gets a token; a result for an
+  // older token is ignored, and a request made while a read is running is
+  // re-issued when it finishes. No file-watcher events are involved, so there's
+  // nothing to race.
+  property int historyToken: 0
+  property bool historyReadAgain: false
+
   function loadHistory() {
     historyLoaded = false
     historyDirty = false
+    diskMinutes = []
     history = Model.parseHistory("", host)
-    if (configured) historyFile.reload()
+    if (!configured) return
+    historyToken++
+    if (historyReadProc.running) { historyReadAgain = true; return }
+    startHistoryRead()
+  }
+
+  function startHistoryRead() {
+    historyReadProc.token = historyToken
+    historyReadProc.command = ["sh", "-c", 'if [ -f "$1" ]; then cat -- "$1"; elif [ -f "$2" ]; then cat -- "$2"; fi',
+      "sh", historyPath, legacyHistoryPath]
+    historyReadProc.running = true
+  }
+
+  Process {
+    id: historyReadProc
+    property int token: 0
+    stdout: StdioCollector {
+      id: historyReadOut
+      waitForEnd: true
+      onStreamFinished: {
+        if (historyReadProc.token === root.historyToken && !root.historyReadAgain) root.adoptHistory(text)
+      }
+    }
+    onExited: {
+      if (root.historyReadAgain) { root.historyReadAgain = false; root.startHistoryRead() }
+    }
+  }
+
+  // Minutes present in the file we last read or wrote. saveHistory refuses to
+  // write if memory holds fewer still-valid minutes than the file does: memory
+  // is always "file + new samples", so fewer means something went wrong.
+  property var diskMinutes: []
+
+  function validCount(minutes, cutoff) {
+    var n = 0
+    for (var i = 0; i < minutes.length; i++) if (minutes[i] > cutoff) n++
+    return n
   }
 
   function adoptHistory(raw) {
     var h = Model.parseHistory(configured ? raw : "", host)
+    diskMinutes = h.b.map(function(r) { return r[0] })
     // Leader: keep samples taken while the file was loading (newer minutes only).
     if (isLeader) {
       var last = h.b.length ? h.b[h.b.length - 1][0] : -1
@@ -358,25 +403,15 @@ Panel {
     historyRevision++
   }
 
+  // Writing only: atomic (temp file + rename, handled by the file API). The
+  // history outgrows Linux's 128 KB limit on a single command-line argument,
+  // which silently broke the original `printf "$2"` save.
   FileView {
     id: historyFile
     path: root.historyPath
     printErrors: false
-    // Written through the file API: the history outgrows Linux's 128 KB limit
-    // on a single command-line argument, which silently broke the old
-    // `bash -c printf "$2"` save once the file passed that size.
     atomicWrites: true
     onSaveFailed: { root.historyDirty = true; console.warn("oracle-vm: could not save history to", root.historyPath) }
-    onLoaded: { if (!root.historyLoaded) root.adoptHistory(text()) }
-    onLoadFailed: { if (!root.historyLoaded) legacyHistoryFile.reload() }
-  }
-
-  FileView {
-    id: legacyHistoryFile
-    path: root.legacyHistoryPath
-    printErrors: false
-    onLoaded: { if (!root.historyLoaded) root.adoptHistory(text()) }
-    onLoadFailed: { if (!root.historyLoaded) root.adoptHistory("") }
   }
 
   Timer {
@@ -388,21 +423,53 @@ Panel {
 
   function saveHistory() {
     if (!historyDirty || !historyLoaded || !isLeader || historyPath === "") return
+    var cutoff = Math.floor(Date.now() / 60000) - Model.WEEK_MIN
+    var memMinutes = history.b.map(function(r) { return r[0] })
+    if (validCount(memMinutes, cutoff) < validCount(diskMinutes, cutoff)) {
+      console.warn("oracle-vm: in-memory history has less data than the file; reloading instead of saving")
+      loadHistory()
+      return
+    }
     historyDirty = false
     var text = Model.serializeHistory(history)
     if (!historyBackedUp) {
       historyBackedUp = true
       pendingHistoryText = text
-      historyBackupProc.command = ["sh", "-c", '[ -f "$1" ] && cp -f -- "$1" "$1.bak"; exit 0', "sh", historyPath]
+      pendingMinutes = memMinutes
+      historyBackupProc.command = ["sh", "-c", root.historyBackupScript, "sh", historyPath]
       historyBackupProc.running = true
       return
     }
     historyFile.setText(text)
+    diskMinutes = memMinutes
   }
+  property var pendingMinutes: []
+
+  // Backup before the first save of a session. The copy goes to a fresh
+  // mktemp file and is renamed over <file>.bak, which replaces a symlink rather
+  // than writing through it. The new history is only written if this succeeds.
+  readonly property string historyBackupScript: [
+    'set -eu',
+    '[ -f "$1" ] || exit 0',
+    'tmp=$(mktemp -- "$1.bak.XXXXXX")',
+    'cat -- "$1" > "$tmp" || { rm -f -- "$tmp"; exit 1; }',
+    'mv -fT -- "$tmp" "$1.bak"'
+  ].join("\n")
 
   Process {
     id: historyBackupProc
-    onExited: { historyFile.setText(root.pendingHistoryText); root.pendingHistoryText = "" }
+    onExited: function(code) {
+      if (code === 0) {
+        historyFile.setText(root.pendingHistoryText)
+        root.diskMinutes = root.pendingMinutes
+      } else {
+        // Keep the samples in memory and try again at the next save.
+        console.warn("oracle-vm: history backup failed; not overwriting", root.historyPath)
+        root.historyBackedUp = false
+        root.historyDirty = true
+      }
+      root.pendingHistoryText = ""
+    }
   }
 
   readonly property var guard: { historyRevision; return Model.reclaimGuard(history, oci.bandwidthGbps || 1) }
