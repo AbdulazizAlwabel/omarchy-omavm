@@ -74,6 +74,9 @@ IPC: `omarchy-shell aziz.oracle-vm open|close|toggle|refresh|shell|status|tab <n
   (1-minute buckets, 7 days; the previous version is kept as `.bak` each session). The SSH control socket lives in
   `~/.cache/aziz-oracle-vm/` (mode 700).
 - Host, user, port and unit names are validated before they reach `ssh`.
+- Local files (history and its backup, SSH error output) are only ever written
+  to fresh `mktemp` files and renamed into place, never through a symlink; a
+  history write is tied to the VM it came from and skipped if you switch VMs.
 - Service restarts and reboots ask for confirmation first. Package upgrades
   open in a visible terminal, where `dnf` asks before changing anything.
 - With two or more monitors, one instance does the background polling and

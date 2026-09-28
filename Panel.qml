@@ -403,15 +403,17 @@ Panel {
     historyRevision++
   }
 
-  // Writing only: atomic (temp file + rename, handled by the file API). The
-  // history outgrows Linux's 128 KB limit on a single command-line argument,
-  // which silently broke the original `printf "$2"` save.
-  FileView {
-    id: historyFile
-    path: root.historyPath
-    printErrors: false
-    atomicWrites: true
-    onSaveFailed: { root.historyDirty = true; console.warn("oracle-vm: could not save history to", root.historyPath) }
+  // Writing: mktemp + rename via SafeWriter (never through a symlink), with the
+  // content on stdin. The history outgrows Linux's 128 KB limit on a single
+  // command-line argument, which silently broke the original `printf "$2"` save.
+  // Every write carries its own path, so it can't land in another VM's file.
+  SafeWriter {
+    id: historyWriter
+    onWritten: function(path, ok) {
+      if (ok) return
+      console.warn("oracle-vm: could not save history to", path)
+      if (path === root.historyPath) root.historyDirty = true
+    }
   }
 
   Timer {
@@ -436,11 +438,14 @@ Panel {
       historyBackedUp = true
       pendingHistoryText = text
       pendingMinutes = memMinutes
+      // Tag the pending write with the file and load it belongs to.
+      historyBackupProc.forPath = historyPath
+      historyBackupProc.forToken = historyToken
       historyBackupProc.command = ["sh", "-c", root.historyBackupScript, "sh", historyPath]
       historyBackupProc.running = true
       return
     }
-    historyFile.setText(text)
+    historyWriter.write(historyPath, text)
     diskMinutes = memMinutes
   }
   property var pendingMinutes: []
@@ -458,9 +463,18 @@ Panel {
 
   Process {
     id: historyBackupProc
+    property string forPath: ""
+    property int forToken: -1
     onExited: function(code) {
+      if (forPath !== root.historyPath || forToken !== root.historyToken) {
+        // The host changed (or history was reloaded) while the backup ran: this
+        // text belongs to the previous VM. Drop it rather than write it into the
+        // new VM's file.
+        root.pendingHistoryText = ""
+        return
+      }
       if (code === 0) {
-        historyFile.setText(root.pendingHistoryText)
+        historyWriter.write(forPath, root.pendingHistoryText)
         root.diskMinutes = root.pendingMinutes
       } else {
         // Keep the samples in memory and try again at the next save.
