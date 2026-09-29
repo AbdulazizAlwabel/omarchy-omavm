@@ -323,59 +323,71 @@ Panel {
   //
   // One file per host, so switching VMs never overwrites another VM's history:
   //   ~/.local/state/omarchy/settings/omavm-history-<host>.json
-  // Before the first save of each session the previous file is copied to
-  // <file>.bak.
+  // The first save of each session also refreshes <file>.bak.
+  // Files from before the OmaVM rename (oracle-vm-history-<host>.json, and the
+  // older single oracle-vm-history.json) are imported once when the new file
+  // doesn't exist yet; parseHistory only accepts data recorded for this host.
   readonly property string historyDir: Quickshell.env("HOME") + "/.local/state/omarchy/settings"
   readonly property string hostSlug: host.replace(/[^A-Za-z0-9._-]/g, "_")
   readonly property string historyPath: configured
     ? historyDir + "/omavm-history-" + hostSlug + ".json" : ""
+  readonly property var historyImports: configured
+    ? [historyDir + "/oracle-vm-history-" + hostSlug + ".json", historyDir + "/oracle-vm-history.json"] : []
   property var history: Model.parseHistory("", host)
   property bool historyLoaded: false
   property bool historyDirty: false
   property int historyRevision: 0
   property bool historyBackedUp: false
-  property string pendingHistoryText: ""
 
-  // ---- Loading: one explicit read, newest request wins ------------------------
-  // A single `cat` reads the per-host file. Every request gets a token; a
-  // result for an older token is ignored, and a request made while a read is
-  // running is re-issued when it finishes. No file-watcher events are
-  // involved, so there's nothing to race.
-  property int historyToken: 0
-  property bool historyReadAgain: false
+  // ---- Loading: size-capped reads, newest request wins ------------------------
+  // BoundedRead (see BoundedRead.qml) checks the size before reading, caps the
+  // stream, refuses symlinks, and reports only the newest request. If the file
+  // can't be read (too large, not a regular file), nothing is loaded and
+  // nothing will be saved over it.
+  property bool historyBlocked: false
+  property int importIndex: 0
 
   function loadHistory() {
     historyLoaded = false
     historyDirty = false
+    historyBlocked = false
     diskMinutes = []
     history = Model.parseHistory("", host)
     if (!configured) return
-    historyToken++
-    if (historyReadProc.running) { historyReadAgain = true; return }
-    startHistoryRead()
+    historyReader.path = historyPath
+    historyReader.read()
   }
 
-  function startHistoryRead() {
-    historyReadProc.token = historyToken
-    historyReadProc.command = ["sh", "-c",
-      '[ -f "$1" ] || exit 0; cat -- "$1"',
-      "sh", historyPath]
-    historyReadProc.running = true
+  function readNextImport() {
+    if (importIndex >= historyImports.length) { adoptHistory(""); return }
+    historyImportReader.path = historyImports[importIndex]
+    importIndex++
+    historyImportReader.read()
   }
 
-  Process {
-    id: historyReadProc
-    property int token: 0
-    stdout: StdioCollector {
-      id: historyReadOut
-      waitForEnd: true
-      onStreamFinished: {
-        if (historyReadProc.token === root.historyToken && !root.historyReadAgain) root.adoptHistory(text)
-      }
+  BoundedRead {
+    id: historyReader
+    limit: 8 * 1024 * 1024
+    onDone: function(raw, status) {
+      if (status === "ok") root.adoptHistory(raw)
+      else if (status === "missing") { root.importIndex = 0; root.readNextImport() }
+      else root.blockHistory(status)
     }
-    onExited: {
-      if (root.historyReadAgain) { root.historyReadAgain = false; root.startHistoryRead() }
+  }
+
+  BoundedRead {
+    id: historyImportReader
+    limit: 8 * 1024 * 1024
+    onDone: function(raw, status) {
+      var h = status === "ok" ? Model.parseHistory(raw, root.host) : null
+      if (h && h.b.length > 0) { root.adoptHistory(raw); root.historyDirty = true }
+      else root.readNextImport()
     }
+  }
+
+  function blockHistory(status) {
+    historyBlocked = true
+    console.warn("omavm: history file not loaded (" + status + "); history won't be saved over it:", historyPath)
   }
 
   // Minutes present in the file we last read or wrote. saveHistory refuses to
@@ -402,28 +414,30 @@ Panel {
     historyRevision++
   }
 
-  // Writing: mktemp + rename via SafeWriter (never through a symlink), with the
-  // content on stdin. The history outgrows Linux's 128 KB limit on a single
-  // command-line argument, which silently broke the original `printf "$2"` save.
-  // Every write carries its own path, so it can't land in another VM's file.
+  // Writing: SafeWriter (mktemp + rename, never through a symlink, content on
+  // stdin). Every write is one immutable job with its own path; the first save
+  // of a session backs up the current file inside that same job and writes only
+  // if the backup succeeded, so a backup can never be credited to another write.
   SafeWriter {
     id: historyWriter
     onWritten: function(path, ok) {
       if (ok) return
       console.warn("omavm: could not save history to", path)
-      if (path === root.historyPath) root.historyDirty = true
+      if (path === root.historyPath) { root.historyDirty = true; root.historyBackedUp = false }
     }
   }
 
+  // Every minute (one bucket), so a shell restart, which can kill an in-flight
+  // save, loses at most a minute of samples.
   Timer {
-    interval: 5 * 60 * 1000
+    interval: 60 * 1000
     running: true
     repeat: true
     onTriggered: root.saveHistory()
   }
 
   function saveHistory() {
-    if (!historyDirty || !historyLoaded || !isLeader || historyPath === "") return
+    if (!historyDirty || !historyLoaded || historyBlocked || !isLeader || historyPath === "") return
     var cutoff = Math.floor(Date.now() / 60000) - Model.WEEK_MIN
     var memMinutes = history.b.map(function(r) { return r[0] })
     if (validCount(memMinutes, cutoff) < validCount(diskMinutes, cutoff)) {
@@ -432,57 +446,10 @@ Panel {
       return
     }
     historyDirty = false
-    var text = Model.serializeHistory(history)
-    if (!historyBackedUp) {
-      historyBackedUp = true
-      pendingHistoryText = text
-      pendingMinutes = memMinutes
-      // Tag the pending write with the file and load it belongs to.
-      historyBackupProc.forPath = historyPath
-      historyBackupProc.forToken = historyToken
-      historyBackupProc.command = ["sh", "-c", root.historyBackupScript, "sh", historyPath]
-      historyBackupProc.running = true
-      return
-    }
-    historyWriter.write(historyPath, text)
+    // One job: (first save of the session) back up, then write this host's file.
+    historyWriter.write(historyPath, Model.serializeHistory(history), !historyBackedUp)
+    historyBackedUp = true
     diskMinutes = memMinutes
-  }
-  property var pendingMinutes: []
-
-  // Backup before the first save of a session. The copy goes to a fresh
-  // mktemp file and is renamed over <file>.bak, which replaces a symlink rather
-  // than writing through it. The new history is only written if this succeeds.
-  readonly property string historyBackupScript: [
-    'set -eu',
-    '[ -f "$1" ] || exit 0',
-    'tmp=$(mktemp -- "$1.bak.XXXXXX")',
-    'cat -- "$1" > "$tmp" || { rm -f -- "$tmp"; exit 1; }',
-    'mv -fT -- "$tmp" "$1.bak"'
-  ].join("\n")
-
-  Process {
-    id: historyBackupProc
-    property string forPath: ""
-    property int forToken: -1
-    onExited: function(code) {
-      if (forPath !== root.historyPath || forToken !== root.historyToken) {
-        // The host changed (or history was reloaded) while the backup ran: this
-        // text belongs to the previous VM. Drop it rather than write it into the
-        // new VM's file.
-        root.pendingHistoryText = ""
-        return
-      }
-      if (code === 0) {
-        historyWriter.write(forPath, root.pendingHistoryText)
-        root.diskMinutes = root.pendingMinutes
-      } else {
-        // Keep the samples in memory and try again at the next save.
-        console.warn("omavm: history backup failed; not overwriting", root.historyPath)
-        root.historyBackedUp = false
-        root.historyDirty = true
-      }
-      root.pendingHistoryText = ""
-    }
   }
 
   readonly property var guard: { historyRevision; return Model.reclaimGuard(history, oci.bandwidthGbps || 1) }
@@ -635,7 +602,8 @@ Panel {
     if (actionProc.running) { showToast("Another action is still running", true); return }
     actionProc.verb = verb
     actionProc.arg = arg || ""
-    actionProc.command = ctlArgs(verb, arg)
+    // stderr is VM-controlled: cap it (pipefail keeps ssh's exit status).
+    actionProc.command = ["bash", "-c", 'set -o pipefail; "$@" 2>&1 >/dev/null | head -c 8192 >&2', "bash"].concat(ctlArgs(verb, arg))
     actionProc.running = true
     showToast(verb === "reboot" ? "Rebooting VM…" : (verb === "makecache" ? "Refreshing package metadata…" : "Restarting " + arg + "…"))
   }

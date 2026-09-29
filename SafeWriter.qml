@@ -7,6 +7,11 @@ import Quickshell.Io
 // a symlink at the path instead of writing through it, so a planted link can't
 // redirect the write into another file. Writes are queued and run one at a time;
 // `written(path, ok)` reports each result in order.
+// write(path, text, true) first copies the current file to <path>.bak the
+// same way (mktemp + rename) inside the same job, and writes only if that
+// succeeded. Each job is an immutable {path, text, backup} record run by its
+// own process invocation, so a finishing backup can never be attributed to a
+// different write.
 Item {
   id: writer
 
@@ -22,16 +27,27 @@ Item {
     'set -eu',
     'd=$(dirname -- "$1")',
     'mkdir -p -- "$d"',
-    't=$(mktemp -- "$d/.$(basename -- "$1").XXXXXX")',
+    'n=$(basename -- "$1")',
+    // A write killed mid-flight (e.g. the shell restarting) can't clean up after
+    // itself; remove our own stale temp files first. Exact names only; -delete
+    // removes a symlink itself, never its target.
+    'find "$d" -maxdepth 1 -type f \\( -name ".$n.??????" -o -name ".$n.bak.??????" \\) -mmin +2 -delete 2>/dev/null || true',
+    'if [ "$2" = 1 ] && [ -f "$1" ] && [ ! -L "$1" ]; then',
+    '  b=$(mktemp -- "$d/.$n.bak.XXXXXX")',
+    '  cat -- "$1" > "$b" || { rm -f -- "$b"; exit 1; }',
+    '  mv -fT -- "$b" "$1.bak"',
+    'fi',
+    't=$(mktemp -- "$d/.$n.XXXXXX")',
     'trap \'rm -f -- "$t"\' EXIT',
+    'trap \'rm -f -- "$t"; exit 1\' INT TERM HUP',
     'cat > "$t"',
     'chmod 644 -- "$t"',
     'mv -fT -- "$t" "$1"',
     'trap - EXIT'
   ].join("\n")
 
-  function write(path, text) {
-    queue = queue.concat([{ path: String(path), text: String(text) }])
+  function write(path, text, backup) {
+    queue = queue.concat([{ path: String(path), text: String(text), backup: backup === true }])
     if (!active) next()
   }
 
@@ -41,7 +57,7 @@ Item {
     var job = queue[0]
     queue = queue.slice(1)
     proc.job = job
-    proc.command = ["sh", "-c", script, "sh", job.path]
+    proc.command = ["sh", "-c", script, "sh", job.path, job.backup ? "1" : "0"]
     proc.running = true
   }
 

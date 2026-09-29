@@ -56,12 +56,13 @@ case "$verb" in
     errf=$(mktemp -- "$cache/err.XXXXXX") || exit 1
     trap 'rm -f -- "$errf"' EXIT
     t0=$(date +%s%N)
-    out=$(ssh "${opts[@]}" "$target" "nice -n 10 python3 - $verb" < "$here/collector.py" 2>"$errf")
+    # Output comes from the VM, so it's capped before it reaches the shell.
+    out=$(ssh "${opts[@]}" "$target" "nice -n 10 python3 - $verb" < "$here/collector.py" 2>"$errf" | head -c 8388608)
     rc=$?
     t1=$(date +%s%N)
     printf '%s\n' "$(( (t1 - t0) / 1000000 ))"
     if (( rc != 0 )); then
-      printf '{"error":%s}\n' "$(tr '\n' ' ' < "$errf" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().strip() or "ssh exited '"$rc"'"))')"
+      printf '{"error":%s}\n' "$(head -c 4096 -- "$errf" | tr '\n' ' ' | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().strip() or "ssh exited '"$rc"'"))')"
       exit "$rc"
     fi
     printf '%s\n' "$out"
