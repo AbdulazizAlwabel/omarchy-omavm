@@ -55,10 +55,17 @@ case "$verb" in
     # removed on exit, never to a fixed path that a symlink could redirect.
     errf=$(mktemp -- "$cache/err.XXXXXX") || exit 1
     trap 'rm -f -- "$errf"' EXIT
+    # Everything the VM sends is bounded while it arrives: stderr keeps only its
+    # first 4 KiB on disk and the rest is drained to /dev/null (so ssh never
+    # blocks or dies on a full pipe), stdout is capped at 8 MiB. pipefail keeps
+    # ssh's exit status.
+    exec 4> >(head -c 4096 > "$errf"; cat > /dev/null)
+    errpid=$!
     t0=$(date +%s%N)
-    # Output comes from the VM, so it's capped before it reaches the shell.
-    out=$(ssh "${opts[@]}" "$target" "nice -n 10 python3 - $verb" < "$here/collector.py" 2>"$errf" | head -c 8388608)
+    out=$(ssh "${opts[@]}" "$target" "nice -n 10 python3 - $verb" < "$here/collector.py" 2>&4 | head -c 8388608)
     rc=$?
+    exec 4>&-
+    wait "$errpid" 2>/dev/null
     t1=$(date +%s%N)
     printf '%s\n' "$(( (t1 - t0) / 1000000 ))"
     if (( rc != 0 )); then
