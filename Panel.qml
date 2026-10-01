@@ -420,6 +420,7 @@ Panel {
   // if the backup succeeded, so a backup can never be credited to another write.
   SafeWriter {
     id: historyWriter
+    tmpDirName: ".omavm-tmp"
     onWritten: function(path, ok) {
       if (ok) return
       console.warn("omavm: could not save history to", path)
